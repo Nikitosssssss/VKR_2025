@@ -1,201 +1,285 @@
-#include <heltec.h>
-#include <ModbusMaster.h>
-#include <LoRaWan_APP.h>
-#include <EEPROM.h>
+#include <SPI.h>           // Библиотека для работы с SPI
+#include <RH_RF95.h>       // Библиотека для работы с RFM95 LoRa
+#include <SoftwareSerial.h> // Библиотека для работы с вторым сериалом
+#include <EEPROM.h>        // Библиотека для работы с энергонезависимой памятью
 
-// Настройки LoRaWAN
-#define LORAWAN_CLASS CLASS_A  // или CLASS_C
-#define LORAWAN_REGION RU868
-#define LORAWAN_ADR_ON true
-#define LORAWAN_NETMODE OTAA  // или ABP
+// Настройки RFM95 LoRa
+#define RFM95_CS 10        // Пин ChipSelect для RFM95
+#define RFM95_RST 9        // Пин сброса для RFM95
+#define RFM95_INT 2        // Пин прерывания для RFM95
 
 // Настройки RS485
-#define RS485_BAUDRATE 9600
-#define RS485_DE_PIN 25
-#define RS485_RE_PIN 26
+#define RS485_RX_PIN 3     // Контакт Rx для RS485
+#define RS485_TX_PIN 4     // Контакт Tx для RS485
+#define RS485_BAUD_RATE 9600 // Скорость передачи данных по RS485
 
-ModbusMaster node;
-HardwareSerial SerialRS485(1);  // UART1 для RS485
+// Настройки опроса Modbus
+#define MODBUS_DEVICE_ADDR 1  // Адрес Modbus-устройства
+#define REG_START_ADDRESS 0   // Начало чтения регистров
+#define REG_COUNT 2           // Сколько регистров читать
 
-// Структура инструкции Modbus
-struct Instruction {
-    uint8_t nodeID;
-    uint8_t functionCode;
-    uint16_t startAddr;
-    uint16_t regCount;
-    uint32_t pollInterval;
-    uint32_t lastPollTime;
-    uint8_t data[128];
-    uint8_t dataLen;
+// Создаем экземпляр LoRa RF95
+RH_RF95 rf95(RFM95_CS, RFM95_INT);
+
+// Создаем виртуальный серийный порт для RS485
+SoftwareSerial rs485Serial(RS485_RX_PIN, RS485_TX_PIN);
+
+// Байт-код для Modbus-запроса
+byte modbusRequest[] = {
+    MODBUS_DEVICE_ADDR, // Адрес устройства
+    0x03,               // Команда чтения регистров (Function Code 0x03)
+    0x00, 0x00,         // Начальный адрес регистра (high-byte, low-byte)
+    0x00, REG_COUNT     // Количество регистров (high-byte, low-byte)
 };
 
+// Структура инструкции для RS485
+struct Instruction {
+    uint8_t deviceAddress;    // Адрес устройства
+    uint8_t functionCode;     // Функция Modbus
+    uint16_t registerStart;   // Начальный адрес регистра
+    uint16_t registerCount;   // Количество регистров
+    uint32_t pollInterval;    // Интервал опроса (мс)
+    uint32_t lastPollTime;    // Время последнего опроса
+};
+
+// Максимальное число инструкций
 #define MAX_INSTRUCTIONS 32
 Instruction instructions[MAX_INSTRUCTIONS];
 uint8_t instructionCount = 0;
 
+// Интервал опроса Modbus-устройств (ms)
+unsigned long pollInterval = 5000; // Интервал опроса (каждый 5 секунд)
+unsigned long lastPollTime = 0;    // Хранит время последнего опроса
+
+// Максимальная длина буфера данных
+#define BUFFER_SIZE 128
+
+// Буфер для хранения данных
+byte buffer[BUFFER_SIZE];
+
 // Режимы работы
-enum Mode { TRANSPARENT, PACKET };   
-Mode currentMode = TRANSPARENT;
+enum Mode {TRANSPARENT,PACKET};
+Mode currentMode = Mode::TRANSPARENT;
 
-// AT-команды
-String atCommand = "";
 
+// Тип передачи данных
+enum TransmissionType { PLAIN, ENCAPSULATED };
+TransmissionType transmissionType = TransmissionType::PLAIN;
+
+// Тайминги
+unsigned long lastCheckTime = 0;
+
+// Вспомогательные функции
+void readEEPROM() {
+    instructionCount = EEPROM.read(0);
+    for (int i = 0; i < instructionCount; i++) {
+        EEPROM.get(i * sizeof(Instruction), instructions[i]);
+    }
+}
+
+void writeEEPROM() {
+    EEPROM.put(0, instructionCount);
+    for (int i = 0; i < instructionCount; i++) {
+        EEPROM.put(i * sizeof(Instruction), instructions[i]);
+    }
+}
+
+// Отображение инструкции
+void showInstruction(Instruction instr) {
+    Serial.print("Instruction: Device addr=");
+    Serial.print(instr.deviceAddress);
+    Serial.print(", Func code=");
+    Serial.print(instr.functionCode, HEX);
+    Serial.print(", Reg start=");
+    Serial.print(instr.registerStart);
+    Serial.print(", Reg count=");
+    Serial.print(instr.registerCount);
+    Serial.print(", Poll interval=");
+    Serial.print(instr.pollInterval);
+    Serial.println(" ms");
+}
+
+// Отображение всех инструкций
+void listAllInstructions() {
+    Serial.println("Stored Instructions:");
+    for (int i = 0; i < instructionCount; i++) {
+        showInstruction(instructions[i]);
+    }
+}
+
+// Инициализация
 void setup() {
-    // Инициализация дисплея и Serial
-    Heltec.begin(true, false, true);
+    // Инициализация последовательного порта
     Serial.begin(115200);
-    SerialRS485.begin(RS485_BAUDRATE, SERIAL_8N1, 16, 17);  // RX, TX
 
-    // Настройка RS485 (DE/RE)
-    pinMode(RS485_DE_PIN, OUTPUT);
-    pinMode(RS485_RE_PIN, OUTPUT);
-    setRS485Receive();
+    // Инициализация RS485
+    rs485Serial.begin(RS485_BAUD_RATE);
 
-    // Инициализация LoRaWAN
-    LoRaWAN.init();
-    LoRaWAN.setClass(LORAWAN_CLASS);
-    LoRaWAN.setRegion(LORAWAN_REGION);
-    LoRaWAN.setAdr(LORAWAN_ADR_ON);
+    // Инициализация RFM95
+    while (!rf95.init()) {
+        Serial.println("RFM95 initialization failed");
+        delay(1000);
+    }
+    Serial.println("RFM95 initialized");
 
-    // Загрузка инструкций из EEPROM
-    loadInstructions();
+    // Конфигурация LoRa-модуля
+    rf95.setFrequency(868.0); // Частота LoRa 868 МГц (Россия)
+    rf95.setTxPower(23);      // Мощность передачи (максимум 23 дБм)
 
-    // Тестовый вывод
-    Serial.println("Heltec RS485-LoRaWAN Gateway Ready");
+    // Инициализация хранилища инструкций
+    readEEPROM();
+
+    // Приветственное сообщение
+    Serial.println("Pro Mini LoRa + RS485 gateway ready!");
 }
 
 void loop() {
-    // Обработка LoRaWAN
-    LoRaWAN.loop();
+    unsigned long currentMillis = millis();
 
-    // Опрос Modbus-устройств по расписанию
-    pollModbusDevices();
-
-    // Обработка AT-команд
-    if (Serial.available()) {
-        char c = Serial.read();
-        if (c == '\n') {
-            processATCommand(atCommand);
-            atCommand = "";
+    // Периодически опрашиваем устройства Modbus
+    if (currentMillis - lastPollTime >= pollInterval) {
+        for (int i = 0; i < instructionCount; i++) {
+            if (currentMillis - instructions[i].lastPollTime >= instructions[i].pollInterval) {
+                queryModbusDevice(instructions[i]);
+                instructions[i].lastPollTime = currentMillis;
+            }
         }
-        else {
-            atCommand += c;
+        lastPollTime = currentMillis;
+    }
+
+    // Проверяем получение данных по LoRa
+    checkIncomingLoRaMessages();
+
+    // Проверка AT-команд
+    handleATCommands();
+
+    // Пустая задержка для стабильности
+    delay(10);
+}
+
+// Запрашивает устройство Modbus и возвращает данные
+void queryModbusDevice(Instruction instr) {
+    // Составляем запрос
+    byte request[8] = {
+        instr.deviceAddress, // Адрес устройства
+        instr.functionCode,  // Функция Modbus
+        highByte(instr.registerStart), lowByte(instr.registerStart), // Начальный адрес регистра
+        highByte(instr.registerCount), lowByte(instr.registerCount) // Количество регистров
+    };
+
+    // Запрашиваем данные по RS485
+    rs485Serial.write(request, sizeof(request));
+
+    // Ждем ответа от устройства
+    delay(100);
+
+    // Считываем ответ
+    int bytesRead = rs485Serial.readBytes(buffer, BUFFER_SIZE);
+
+    // Отправляем полученные данные через LoRa
+    if (bytesRead > 0) {
+        sendLoRaMessage(buffer, bytesRead);
+    }
+}
+
+// Отправляет данные через LoRa
+void sendLoRaMessage(byte* data, int length) {
+    if (!rf95.send(data, length)) {
+        Serial.println("Failed to send LoRa message");
+    }
+    else {
+        Serial.println("LoRa message sent successfully");
+    }
+
+    // Ждем завершение передачи
+    rf95.waitPacketSent();
+}
+
+// Проверяет поступающие сообщения LoRa
+void checkIncomingLoRaMessages() {
+    if (rf95.available()) {
+        // Прием данных
+        uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+        uint8_t len = sizeof(buf);
+
+        if (rf95.recv(buf, &len)) {
+            Serial.print("Received LoRa message: ");
+            Serial.write(buf, len);
+            Serial.println();
+
+            // Ответить данным устройствам RS485
+            respondToRS485(buf, len);
         }
     }
 }
 
-// Опрос Modbus-устройств
-void pollModbusDevices() {
-    uint32_t currentTime = millis();
-    for (int i = 0; i < instructionCount; i++) {
-        if (currentTime - instructions[i].lastPollTime >= instructions[i].pollInterval) {
-            queryModbusDevice(instructions[i]);
-            instructions[i].lastPollTime = currentTime;
-        }
-    }
-}
-
-// Запрос к Modbus-устройству
-void queryModbusDevice(Instruction& inst) {
-    node.begin(inst.nodeID, SerialRS485);
-    setRS485Transmit();
-
-    uint8_t result;
-    switch (inst.functionCode) {
-    case 0x03:  // Read Holding Registers
-        result = node.readHoldingRegisters(inst.startAddr, inst.regCount);
-        break;
-    case 0x04:  // Read Input Registers
-        result = node.readInputRegisters(inst.startAddr, inst.regCount);
-        break;
-    default:
-        return;
-    }
-
-    setRS485Receive();
-
-    if (result == node.ku8MBSuccess) {
-        inst.dataLen = 0;
-        for (int j = 0; j < inst.regCount; j++) {
-            uint16_t val = node.getResponseBuffer(j);
-            inst.data[inst.dataLen++] = val >> 8;
-            inst.data[inst.dataLen++] = val & 0xFF;
-        }
-        sendLoRaData(inst);
-    }
-}
-
-// Отправка данных через LoRa
-void sendLoRaData(Instruction& inst) {
-    uint8_t payload[128];
-    uint8_t payloadLen = 0;
-
-    if (currentMode == TRANSPARENT) {
-        memcpy(payload, inst.data, inst.dataLen);
-        payloadLen = inst.dataLen;
-    }
-    else {  // PACKET mode
-        payload[0] = inst.nodeID;
-        payload[1] = inst.functionCode;
-        payload[2] = inst.startAddr >> 8;
-        payload[3] = inst.startAddr & 0xFF;
-        payload[4] = inst.regCount >> 8;
-        payload[5] = inst.regCount & 0xFF;
-        memcpy(payload + 6, inst.data, inst.dataLen);
-        payloadLen = 6 + inst.dataLen;
-    }
-
-    LoRaWAN.send(payloadLen, payload, LORAWAN_DEFAULT_CONFIRMED_MSG_RETRY, LORAWAN_DEFAULT_SF);
+// Отправляет данные устройствам RS485
+void respondToRS485(byte* data, int length) {
+    rs485Serial.write(data, length);
 }
 
 // Обработка AT-команд
-void processATCommand(String cmd) {
-    if (cmd.startsWith("AT+LIST")) {
-        listInstructions();
-    }
-    else if (cmd.startsWith("AT+MODE=")) {
-        currentMode = (cmd.substring(8).toInt() == 0) ? TRANSPARENT : PACKET;
-        Serial.println("OK");
-    }
-    else {
-        Serial.println("ERROR");
-    }
-}
-
-// Вывод списка инструкций
-void listInstructions() {
-    for (int i = 0; i < instructionCount; i++) {
-        Serial.print("Instruction ");
-        Serial.print(i);
-        Serial.print(": NodeID=");
-        Serial.print(instructions[i].nodeID);
-        Serial.print(", FC=");
-        Serial.print(instructions[i].functionCode, HEX);
-        Serial.print(", Addr=");
-        Serial.print(instructions[i].startAddr);
-        Serial.print(", Count=");
-        Serial.print(instructions[i].regCount);
-        Serial.print(", Interval=");
-        Serial.println(instructions[i].pollInterval);
+void handleATCommands() {
+    if (Serial.available()) {
+        String input = Serial.readStringUntil('\n');
+        if (input.startsWith("AT+SHOW")) {
+            listAllInstructions();
+        }
+        else if (input.startsWith("AT+ADD")) {
+            parseAddInstruction(input);
+        }
+        else if (input.startsWith("AT+SET_MODE")) {
+            parseSetMode(input);
+        }
     }
 }
 
-// Загрузка инструкций из EEPROM
-void loadInstructions() {
-    EEPROM.begin(4096);
-    instructionCount = EEPROM.read(0);
-    for (int i = 0; i < instructionCount; i++) {
-        EEPROM.get(1 + i * sizeof(Instruction), instructions[i]);
+// Парсим команду добавления инструкции
+void parseAddInstruction(String input) {
+    int index = input.indexOf(' ');
+    if (index != -1) {
+        String args = input.substring(index + 1);
+        int devAddr = args.toInt();
+        args.remove(0, strlen(String(devAddr).c_str()));
+        args.trim();
+        int funcCode = args.toInt();
+        args.remove(0, strlen(String(funcCode).c_str()));
+        args.trim();
+        int regStart = args.toInt();
+        args.remove(0, strlen(String(regStart).c_str()));
+        args.trim();
+        int regCount = args.toInt();
+        args.remove(0, strlen(String(regCount).c_str()));
+        args.trim();
+        int pollInt = args.toInt();
+
+        Instruction newInstr = {
+            devAddr, funcCode, regStart, regCount, pollInt, 0
+        };
+
+        if (instructionCount < MAX_INSTRUCTIONS) {
+            memcpy(&instructions[instructionCount], &newInstr, sizeof(Instruction)); // Копируем структуру
+            instructionCount++; // Увеличиваем индекс после присвоения
+            writeEEPROM();
+            Serial.println("Instruction added");
+        }
+        else {
+            Serial.println("No more room for instructions");
+        }
     }
 }
 
-// Управление RS485 (передача/приём)
-void setRS485Transmit() {
-    digitalWrite(RS485_DE_PIN, HIGH);
-    digitalWrite(RS485_RE_PIN, HIGH);
-}
-
-void setRS485Receive() {
-    digitalWrite(RS485_DE_PIN, LOW);
-    digitalWrite(RS485_RE_PIN, LOW);
+// Парсим команду смены режима
+void parseSetMode(String input) {
+    int index = input.indexOf(' ');
+    if (index != -1) {
+        String arg = input.substring(index + 1);
+        if (arg == "PLAIN") {
+            transmissionType = TransmissionType::PLAIN;
+        }
+        else if (arg == "ENCAPSULATED") {
+            transmissionType = TransmissionType::ENCAPSULATED;
+        }
+        Serial.println("Mode changed");
+    }
 }
