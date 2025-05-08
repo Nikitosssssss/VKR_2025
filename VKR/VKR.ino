@@ -1,75 +1,75 @@
-#include <SPI.h>           // Библиотека для работы с SPI
-#include <RH_RF95.h>       // Библиотека для работы с RFM95 LoRa
-#include <SoftwareSerial.h> // Библиотека для работы с вторым сериалом
-#include <EEPROM.h>        // Библиотека для работы с энергонезависимой памятью
+#include <SPI.h>           // Р‘РёР±Р»РёРѕС‚РµРєР° РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ SPI
+#include <RH_RF95.h>       // Р‘РёР±Р»РёРѕС‚РµРєР° РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ RFM95 LoRa
+#include <SoftwareSerial.h> // Р‘РёР±Р»РёРѕС‚РµРєР° РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ РІС‚РѕСЂС‹Рј СЃРµСЂРёР°Р»РѕРј
+#include <EEPROM.h>        // Р‘РёР±Р»РёРѕС‚РµРєР° РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ СЌРЅРµСЂРіРѕРЅРµР·Р°РІРёСЃРёРјРѕР№ РїР°РјСЏС‚СЊСЋ
 
-// Настройки RFM95 LoRa
-#define RFM95_CS 10        // Пин ChipSelect для RFM95
-#define RFM95_RST 9        // Пин сброса для RFM95
-#define RFM95_INT 2        // Пин прерывания для RFM95
+// РќР°СЃС‚СЂРѕР№РєРё RFM95 LoRa
+#define RFM95_CS 10        // РџРёРЅ ChipSelect РґР»СЏ RFM95
+#define RFM95_RST 9        // РџРёРЅ СЃР±СЂРѕСЃР° РґР»СЏ RFM95
+#define RFM95_INT 2        // РџРёРЅ РїСЂРµСЂС‹РІР°РЅРёСЏ РґР»СЏ RFM95
 
-// Настройки RS485
-#define RS485_RX_PIN 3     // Контакт Rx для RS485
-#define RS485_TX_PIN 4     // Контакт Tx для RS485
-#define RS485_BAUD_RATE 9600 // Скорость передачи данных по RS485
+// РќР°СЃС‚СЂРѕР№РєРё RS485
+#define RS485_RX_PIN 3     // РљРѕРЅС‚Р°РєС‚ Rx РґР»СЏ RS485
+#define RS485_TX_PIN 4     // РљРѕРЅС‚Р°РєС‚ Tx РґР»СЏ RS485
+#define RS485_BAUD_RATE 9600 // РЎРєРѕСЂРѕСЃС‚СЊ РїРµСЂРµРґР°С‡Рё РґР°РЅРЅС‹С… РїРѕ RS485
 
-// Настройки опроса Modbus
-#define MODBUS_DEVICE_ADDR 1  // Адрес Modbus-устройства
-#define REG_START_ADDRESS 0   // Начало чтения регистров
-#define REG_COUNT 2           // Сколько регистров читать
+// РќР°СЃС‚СЂРѕР№РєРё РѕРїСЂРѕСЃР° Modbus
+#define MODBUS_DEVICE_ADDR 1  // РђРґСЂРµСЃ Modbus-СѓСЃС‚СЂРѕР№СЃС‚РІР°
+#define REG_START_ADDRESS 0   // РќР°С‡Р°Р»Рѕ С‡С‚РµРЅРёСЏ СЂРµРіРёСЃС‚СЂРѕРІ
+#define REG_COUNT 2           // РЎРєРѕР»СЊРєРѕ СЂРµРіРёСЃС‚СЂРѕРІ С‡РёС‚Р°С‚СЊ
 
-// Создаем экземпляр LoRa RF95
+// РЎРѕР·РґР°РµРј СЌРєР·РµРјРїР»СЏСЂ LoRa RF95
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-// Создаем виртуальный серийный порт для RS485
+// РЎРѕР·РґР°РµРј РІРёСЂС‚СѓР°Р»СЊРЅС‹Р№ СЃРµСЂРёР№РЅС‹Р№ РїРѕСЂС‚ РґР»СЏ RS485
 SoftwareSerial rs485Serial(RS485_RX_PIN, RS485_TX_PIN);
 
-// Байт-код для Modbus-запроса
+// Р‘Р°Р№С‚-РєРѕРґ РґР»СЏ Modbus-Р·Р°РїСЂРѕСЃР°
 byte modbusRequest[] = {
-    MODBUS_DEVICE_ADDR, // Адрес устройства
-    0x03,               // Команда чтения регистров (Function Code 0x03)
-    0x00, 0x00,         // Начальный адрес регистра (high-byte, low-byte)
-    0x00, REG_COUNT     // Количество регистров (high-byte, low-byte)
+    MODBUS_DEVICE_ADDR, // РђРґСЂРµСЃ СѓСЃС‚СЂРѕР№СЃС‚РІР°
+    0x03,               // РљРѕРјР°РЅРґР° С‡С‚РµРЅРёСЏ СЂРµРіРёСЃС‚СЂРѕРІ (Function Code 0x03)
+    0x00, 0x00,         // РќР°С‡Р°Р»СЊРЅС‹Р№ Р°РґСЂРµСЃ СЂРµРіРёСЃС‚СЂР° (high-byte, low-byte)
+    0x00, REG_COUNT     // РљРѕР»РёС‡РµСЃС‚РІРѕ СЂРµРіРёСЃС‚СЂРѕРІ (high-byte, low-byte)
 };
 
-// Структура инструкции для RS485
+// РЎС‚СЂСѓРєС‚СѓСЂР° РёРЅСЃС‚СЂСѓРєС†РёРё РґР»СЏ RS485
 struct Instruction {
-    uint8_t deviceAddress;    // Адрес устройства
-    uint8_t functionCode;     // Функция Modbus
-    uint16_t registerStart;   // Начальный адрес регистра
-    uint16_t registerCount;   // Количество регистров
-    uint32_t pollInterval;    // Интервал опроса (мс)
-    uint32_t lastPollTime;    // Время последнего опроса
+    uint8_t deviceAddress;    // РђРґСЂРµСЃ СѓСЃС‚СЂРѕР№СЃС‚РІР°
+    uint8_t functionCode;     // Р¤СѓРЅРєС†РёСЏ Modbus
+    uint16_t registerStart;   // РќР°С‡Р°Р»СЊРЅС‹Р№ Р°РґСЂРµСЃ СЂРµРіРёСЃС‚СЂР°
+    uint16_t registerCount;   // РљРѕР»РёС‡РµСЃС‚РІРѕ СЂРµРіРёСЃС‚СЂРѕРІ
+    uint32_t pollInterval;    // РРЅС‚РµСЂРІР°Р» РѕРїСЂРѕСЃР° (РјСЃ)
+    uint32_t lastPollTime;    // Р’СЂРµРјСЏ РїРѕСЃР»РµРґРЅРµРіРѕ РѕРїСЂРѕСЃР°
 };
 
-// Максимальное число инструкций
+// РњР°РєСЃРёРјР°Р»СЊРЅРѕРµ С‡РёСЃР»Рѕ РёРЅСЃС‚СЂСѓРєС†РёР№
 #define MAX_INSTRUCTIONS 32
 Instruction instructions[MAX_INSTRUCTIONS];
 uint8_t instructionCount = 0;
 
-// Интервал опроса Modbus-устройств (ms)
-unsigned long pollInterval = 5000; // Интервал опроса (каждый 5 секунд)
-unsigned long lastPollTime = 0;    // Хранит время последнего опроса
+// РРЅС‚РµСЂРІР°Р» РѕРїСЂРѕСЃР° Modbus-СѓСЃС‚СЂРѕР№СЃС‚РІ (ms)
+unsigned long pollInterval = 5000; // РРЅС‚РµСЂРІР°Р» РѕРїСЂРѕСЃР° (РєР°Р¶РґС‹Р№ 5 СЃРµРєСѓРЅРґ)
+unsigned long lastPollTime = 0;    // РҐСЂР°РЅРёС‚ РІСЂРµРјСЏ РїРѕСЃР»РµРґРЅРµРіРѕ РѕРїСЂРѕСЃР°
 
-// Максимальная длина буфера данных
+// РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ РґР»РёРЅР° Р±СѓС„РµСЂР° РґР°РЅРЅС‹С…
 #define BUFFER_SIZE 128
 
-// Буфер для хранения данных
+// Р‘СѓС„РµСЂ РґР»СЏ С…СЂР°РЅРµРЅРёСЏ РґР°РЅРЅС‹С…
 byte buffer[BUFFER_SIZE];
 
-// Режимы работы
+// Р РµР¶РёРјС‹ СЂР°Р±РѕС‚С‹
 enum Mode {TRANSPARENT,PACKET};
 Mode currentMode = Mode::TRANSPARENT;
 
 
-// Тип передачи данных
+// РўРёРї РїРµСЂРµРґР°С‡Рё РґР°РЅРЅС‹С…
 enum TransmissionType { PLAIN, ENCAPSULATED };
 TransmissionType transmissionType = TransmissionType::PLAIN;
 
-// Тайминги
+// РўР°Р№РјРёРЅРіРё
 unsigned long lastCheckTime = 0;
 
-// Вспомогательные функции
+// Р’СЃРїРѕРјРѕРіР°С‚РµР»СЊРЅС‹Рµ С„СѓРЅРєС†РёРё
 void readEEPROM() {
     instructionCount = EEPROM.read(0);
     for (int i = 0; i < instructionCount; i++) {
@@ -84,7 +84,7 @@ void writeEEPROM() {
     }
 }
 
-// Отображение инструкции
+// РћС‚РѕР±СЂР°Р¶РµРЅРёРµ РёРЅСЃС‚СЂСѓРєС†РёРё
 void showInstruction(Instruction instr) {
     Serial.print("Instruction: Device addr=");
     Serial.print(instr.deviceAddress);
@@ -99,7 +99,7 @@ void showInstruction(Instruction instr) {
     Serial.println(" ms");
 }
 
-// Отображение всех инструкций
+// РћС‚РѕР±СЂР°Р¶РµРЅРёРµ РІСЃРµС… РёРЅСЃС‚СЂСѓРєС†РёР№
 void listAllInstructions() {
     Serial.println("Stored Instructions:");
     for (int i = 0; i < instructionCount; i++) {
@@ -107,36 +107,36 @@ void listAllInstructions() {
     }
 }
 
-// Инициализация
+// РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ
 void setup() {
-    // Инициализация последовательного порта
+    // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ РїРѕСЃР»РµРґРѕРІР°С‚РµР»СЊРЅРѕРіРѕ РїРѕСЂС‚Р°
     Serial.begin(115200);
 
-    // Инициализация RS485
+    // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ RS485
     rs485Serial.begin(RS485_BAUD_RATE);
 
-    // Инициализация RFM95
+    // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ RFM95
     while (!rf95.init()) {
         Serial.println("RFM95 initialization failed");
         delay(1000);
     }
     Serial.println("RFM95 initialized");
 
-    // Конфигурация LoRa-модуля
-    rf95.setFrequency(868.0); // Частота LoRa 868 МГц (Россия)
-    rf95.setTxPower(23);      // Мощность передачи (максимум 23 дБм)
+    // РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ LoRa-РјРѕРґСѓР»СЏ
+    rf95.setFrequency(868.0); // Р§Р°СЃС‚РѕС‚Р° LoRa 868 РњР“С† (Р РѕСЃСЃРёСЏ)
+    rf95.setTxPower(23);      // РњРѕС‰РЅРѕСЃС‚СЊ РїРµСЂРµРґР°С‡Рё (РјР°РєСЃРёРјСѓРј 23 РґР‘Рј)
 
-    // Инициализация хранилища инструкций
+    // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ С…СЂР°РЅРёР»РёС‰Р° РёРЅСЃС‚СЂСѓРєС†РёР№
     readEEPROM();
 
-    // Приветственное сообщение
+    // РџСЂРёРІРµС‚СЃС‚РІРµРЅРЅРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ
     Serial.println("Pro Mini LoRa + RS485 gateway ready!");
 }
 
 void loop() {
     unsigned long currentMillis = millis();
 
-    // Периодически опрашиваем устройства Modbus
+    // РџРµСЂРёРѕРґРёС‡РµСЃРєРё РѕРїСЂР°С€РёРІР°РµРј СѓСЃС‚СЂРѕР№СЃС‚РІР° Modbus
     if (currentMillis - lastPollTime >= pollInterval) {
         for (int i = 0; i < instructionCount; i++) {
             if (currentMillis - instructions[i].lastPollTime >= instructions[i].pollInterval) {
@@ -147,42 +147,42 @@ void loop() {
         lastPollTime = currentMillis;
     }
 
-    // Проверяем получение данных по LoRa
+    // РџСЂРѕРІРµСЂСЏРµРј РїРѕР»СѓС‡РµРЅРёРµ РґР°РЅРЅС‹С… РїРѕ LoRa
     checkIncomingLoRaMessages();
 
-    // Проверка AT-команд
+    // РџСЂРѕРІРµСЂРєР° AT-РєРѕРјР°РЅРґ
     handleATCommands();
 
-    // Пустая задержка для стабильности
+    // РџСѓСЃС‚Р°СЏ Р·Р°РґРµСЂР¶РєР° РґР»СЏ СЃС‚Р°Р±РёР»СЊРЅРѕСЃС‚Рё
     delay(10);
 }
 
-// Запрашивает устройство Modbus и возвращает данные
+// Р—Р°РїСЂР°С€РёРІР°РµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ Modbus Рё РІРѕР·РІСЂР°С‰Р°РµС‚ РґР°РЅРЅС‹Рµ
 void queryModbusDevice(Instruction instr) {
-    // Составляем запрос
+    // РЎРѕСЃС‚Р°РІР»СЏРµРј Р·Р°РїСЂРѕСЃ
     byte request[8] = {
-        instr.deviceAddress, // Адрес устройства
-        instr.functionCode,  // Функция Modbus
-        highByte(instr.registerStart), lowByte(instr.registerStart), // Начальный адрес регистра
-        highByte(instr.registerCount), lowByte(instr.registerCount) // Количество регистров
+        instr.deviceAddress, // РђРґСЂРµСЃ СѓСЃС‚СЂРѕР№СЃС‚РІР°
+        instr.functionCode,  // Р¤СѓРЅРєС†РёСЏ Modbus
+        highByte(instr.registerStart), lowByte(instr.registerStart), // РќР°С‡Р°Р»СЊРЅС‹Р№ Р°РґСЂРµСЃ СЂРµРіРёСЃС‚СЂР°
+        highByte(instr.registerCount), lowByte(instr.registerCount) // РљРѕР»РёС‡РµСЃС‚РІРѕ СЂРµРіРёСЃС‚СЂРѕРІ
     };
 
-    // Запрашиваем данные по RS485
+    // Р—Р°РїСЂР°С€РёРІР°РµРј РґР°РЅРЅС‹Рµ РїРѕ RS485
     rs485Serial.write(request, sizeof(request));
 
-    // Ждем ответа от устройства
+    // Р–РґРµРј РѕС‚РІРµС‚Р° РѕС‚ СѓСЃС‚СЂРѕР№СЃС‚РІР°
     delay(100);
 
-    // Считываем ответ
+    // РЎС‡РёС‚С‹РІР°РµРј РѕС‚РІРµС‚
     int bytesRead = rs485Serial.readBytes(buffer, BUFFER_SIZE);
 
-    // Отправляем полученные данные через LoRa
+    // РћС‚РїСЂР°РІР»СЏРµРј РїРѕР»СѓС‡РµРЅРЅС‹Рµ РґР°РЅРЅС‹Рµ С‡РµСЂРµР· LoRa
     if (bytesRead > 0) {
         sendLoRaMessage(buffer, bytesRead);
     }
 }
 
-// Отправляет данные через LoRa
+// РћС‚РїСЂР°РІР»СЏРµС‚ РґР°РЅРЅС‹Рµ С‡РµСЂРµР· LoRa
 void sendLoRaMessage(byte* data, int length) {
     if (!rf95.send(data, length)) {
         Serial.println("Failed to send LoRa message");
@@ -191,14 +191,14 @@ void sendLoRaMessage(byte* data, int length) {
         Serial.println("LoRa message sent successfully");
     }
 
-    // Ждем завершение передачи
+    // Р–РґРµРј Р·Р°РІРµСЂС€РµРЅРёРµ РїРµСЂРµРґР°С‡Рё
     rf95.waitPacketSent();
 }
 
-// Проверяет поступающие сообщения LoRa
+// РџСЂРѕРІРµСЂСЏРµС‚ РїРѕСЃС‚СѓРїР°СЋС‰РёРµ СЃРѕРѕР±С‰РµРЅРёСЏ LoRa
 void checkIncomingLoRaMessages() {
     if (rf95.available()) {
-        // Прием данных
+        // РџСЂРёРµРј РґР°РЅРЅС‹С…
         uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
         uint8_t len = sizeof(buf);
 
@@ -207,18 +207,18 @@ void checkIncomingLoRaMessages() {
             Serial.write(buf, len);
             Serial.println();
 
-            // Ответить данным устройствам RS485
+            // РћС‚РІРµС‚РёС‚СЊ РґР°РЅРЅС‹Рј СѓСЃС‚СЂРѕР№СЃС‚РІР°Рј RS485
             respondToRS485(buf, len);
         }
     }
 }
 
-// Отправляет данные устройствам RS485
+// РћС‚РїСЂР°РІР»СЏРµС‚ РґР°РЅРЅС‹Рµ СѓСЃС‚СЂРѕР№СЃС‚РІР°Рј RS485
 void respondToRS485(byte* data, int length) {
     rs485Serial.write(data, length);
 }
 
-// Обработка AT-команд
+// РћР±СЂР°Р±РѕС‚РєР° AT-РєРѕРјР°РЅРґ
 void handleATCommands() {
     if (Serial.available()) {
         String input = Serial.readStringUntil('\n');
@@ -234,7 +234,7 @@ void handleATCommands() {
     }
 }
 
-// Парсим команду добавления инструкции
+// РџР°СЂСЃРёРј РєРѕРјР°РЅРґСѓ РґРѕР±Р°РІР»РµРЅРёСЏ РёРЅСЃС‚СЂСѓРєС†РёРё
 void parseAddInstruction(String input) {
     int index = input.indexOf(' ');
     if (index != -1) {
@@ -258,8 +258,8 @@ void parseAddInstruction(String input) {
         };
 
         if (instructionCount < MAX_INSTRUCTIONS) {
-            memcpy(&instructions[instructionCount], &newInstr, sizeof(Instruction)); // Копируем структуру
-            instructionCount++; // Увеличиваем индекс после присвоения
+            memcpy(&instructions[instructionCount], &newInstr, sizeof(Instruction)); // РљРѕРїРёСЂСѓРµРј СЃС‚СЂСѓРєС‚СѓСЂСѓ
+            instructionCount++; // РЈРІРµР»РёС‡РёРІР°РµРј РёРЅРґРµРєСЃ РїРѕСЃР»Рµ РїСЂРёСЃРІРѕРµРЅРёСЏ
             writeEEPROM();
             Serial.println("Instruction added");
         }
@@ -269,7 +269,7 @@ void parseAddInstruction(String input) {
     }
 }
 
-// Парсим команду смены режима
+// РџР°СЂСЃРёРј РєРѕРјР°РЅРґСѓ СЃРјРµРЅС‹ СЂРµР¶РёРјР°
 void parseSetMode(String input) {
     int index = input.indexOf(' ');
     if (index != -1) {
