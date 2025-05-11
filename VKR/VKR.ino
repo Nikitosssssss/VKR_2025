@@ -51,16 +51,23 @@ uint8_t instructionCount = 0;
 unsigned long pollInterval = 5000; // Интервал опроса (каждый 5 секунд)
 unsigned long lastPollTime = 0;    // Хранит время последнего опроса
 
+// Интервал отправки данных на сервер (ms)
+unsigned long sendToServerInterval = 10000; // Интервал отправки данных на сервер (каждые 10 секунд)
+unsigned long lastSendTime = 0;             // Хранит время последней отправки на сервер
+
 // Максимальная длина буфера данных
 #define BUFFER_SIZE 128
 
 // Буфер для хранения данных
 byte buffer[BUFFER_SIZE];
 
-// Режимы работы
-enum Mode {TRANSPARENT,PACKET};
-Mode currentMode = Mode::TRANSPARENT;
+// Буфер для отправки на сервер
+byte serverBuffer[BUFFER_SIZE];
+uint16_t serverBufferLength = 0; // Длина данных в буфере
 
+// Режимы работы
+enum Mode { TRANSPARENT, PACKET };
+Mode currentMode = Mode::TRANSPARENT;
 
 // Тип передачи данных
 enum TransmissionType { PLAIN, ENCAPSULATED };
@@ -147,6 +154,15 @@ void loop() {
         lastPollTime = currentMillis;
     }
 
+    // Периодически отправляем данные на сервер
+    if (currentMillis - lastSendTime >= sendToServerInterval) {
+        if (serverBufferLength > 0) {
+            sendLoRaMessage(serverBuffer, serverBufferLength);
+            serverBufferLength = 0; // Очищаем буфер после отправки
+        }
+        lastSendTime = currentMillis;
+    }
+
     // Проверяем получение данных по LoRa
     checkIncomingLoRaMessages();
 
@@ -176,9 +192,10 @@ void queryModbusDevice(Instruction instr) {
     // Считываем ответ
     int bytesRead = rs485Serial.readBytes(buffer, BUFFER_SIZE);
 
-    // Отправляем полученные данные через LoRa
+    // Копируем полученные данные в буфер для отправки на сервер
     if (bytesRead > 0) {
-        sendLoRaMessage(buffer, bytesRead);
+        memcpy(serverBuffer, buffer, bytesRead);
+        serverBufferLength = bytesRead;
     }
 }
 
