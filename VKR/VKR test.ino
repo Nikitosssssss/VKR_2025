@@ -3,39 +3,39 @@
 #include <SPI.h>
 
 
-// LoRaWAN NwkSKey, network session key - network session key, сетевой ключ доступа
+// LoRaWAN NwkSKey, network session key - network session key, СЃРµС‚РµРІРѕР№ РєР»СЋС‡ РґРѕСЃС‚СѓРїР°
 static const PROGMEM u1_t NWKSKEY[16] = { 0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x26 };
 
-// LoRaWAN AppSKey, application session key - ключ доступа приложения
+// LoRaWAN AppSKey, application session key - РєР»СЋС‡ РґРѕСЃС‚СѓРїР° РїСЂРёР»РѕР¶РµРЅРёСЏ
 static const u1_t PROGMEM APPSKEY[16] = { 0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x26 };
 
-// LoRaWAN end-device address (DevAddr) - адрес устройства
+// LoRaWAN end-device address (DevAddr) - Р°РґСЂРµСЃ СѓСЃС‚СЂРѕР№СЃС‚РІР°
 static const u4_t DEVADDR = 0x22222226; 
 
 
-static uint8_t mydata[4];           //массив данных, буду отправлять несколько чисел
+static uint8_t mydata[4];           //РјР°СЃСЃРёРІ РґР°РЅРЅС‹С…, Р±СѓРґСѓ РѕС‚РїСЂР°РІР»СЏС‚СЊ РЅРµСЃРєРѕР»СЊРєРѕ С‡РёСЃРµР»
 static osjob_t sendjob;
 
-const unsigned TX_INTERVAL = 30;        //раз в 30 сек будет отправлять данные на БС
-const unsigned port = 1;                //порт для передачи
+const unsigned TX_INTERVAL = 30;        //СЂР°Р· РІ 30 СЃРµРє Р±СѓРґРµС‚ РѕС‚РїСЂР°РІР»СЏС‚СЊ РґР°РЅРЅС‹Рµ РЅР° Р‘РЎ
+const unsigned port = 1;                //РїРѕСЂС‚ РґР»СЏ РїРµСЂРµРґР°С‡Рё
  
 
-// Установка частоты RX2 (в Гц)  
-const uint32_t RX2_FREQ = 869100000; // 869.1 МГц  
+// РЈСЃС‚Р°РЅРѕРІРєР° С‡Р°СЃС‚РѕС‚С‹ RX2 (РІ Р“С†)  
+const uint32_t RX2_FREQ = 869100000; // 869.1 РњР“С†  
 
-// Установка Data Rate RX2 (DR0 для RU868)  
+// РЈСЃС‚Р°РЅРѕРІРєР° Data Rate RX2 (DR0 РґР»СЏ RU868)  
 const uint8_t RX2_DR = DR_SF12;
 
 
-// Пин-маппинг RFM95
-// Не знаю, как нужно настроить пины
+// РџРёРЅ-РјР°РїРїРёРЅРі RFM95
+// РќРµ Р·РЅР°СЋ, РєР°Рє РЅСѓР¶РЅРѕ РЅР°СЃС‚СЂРѕРёС‚СЊ РїРёРЅС‹
 const lmic_pinmap lmic_pins = {
-    .nss = 10,                      //пин микросхемы. Проверяет, готово ли к работе устройство
-    .rxtx = LMIC_UNUSED_PIN,        //пин прехода с TX на RX, переключение режима
-    .rst = 9,                       //пин reset
+    .nss = 10,                      //РїРёРЅ РјРёРєСЂРѕСЃС…РµРјС‹. РџСЂРѕРІРµСЂСЏРµС‚, РіРѕС‚РѕРІРѕ Р»Рё Рє СЂР°Р±РѕС‚Рµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ
+    .rxtx = LMIC_UNUSED_PIN,        //РїРёРЅ РїСЂРµС…РѕРґР° СЃ TX РЅР° RX, РїРµСЂРµРєР»СЋС‡РµРЅРёРµ СЂРµР¶РёРјР°
+    .rst = 9,                       //РїРёРЅ reset
     .dio = {2, 3, LMIC_UNUSED_PIN}, // DIO0, DIO1, DIO2
 };
-// ===== Прототипы функций =====
+// ===== РџСЂРѕС‚РѕС‚РёРїС‹ С„СѓРЅРєС†РёР№ =====
 void sendStatus(osjob_t* j);
 void checkAlarm();
 void sendAlarm();
@@ -44,13 +44,13 @@ void sendAlarm();
 uint8_t dataLength = 0;
 bool newDataReceived = false;
 
-//Параметры:
-// ev_t ev - событие, произошедшее в системе
+//РџР°СЂР°РјРµС‚СЂС‹:
+// ev_t ev - СЃРѕР±С‹С‚РёРµ, РїСЂРѕРёР·РѕС€РµРґС€РµРµ РІ СЃРёСЃС‚РµРјРµ
 void onEvent(ev_t ev) {
-    Serial.print(os_getTime());     //выводит текущее время
+    Serial.print(os_getTime());     //РІС‹РІРѕРґРёС‚ С‚РµРєСѓС‰РµРµ РІСЂРµРјСЏ
     Serial.print(": ");
     switch (ev) {
-    case EV_TXCOMPLETE:         //если отправка завершена успешно, то выведем сообщение
+    case EV_TXCOMPLETE:         //РµСЃР»Рё РѕС‚РїСЂР°РІРєР° Р·Р°РІРµСЂС€РµРЅР° СѓСЃРїРµС€РЅРѕ, С‚Рѕ РІС‹РІРµРґРµРј СЃРѕРѕР±С‰РµРЅРёРµ
         Serial.println("EV_TXCOMPLETE");
         if (LMIC.txrxFlags & TXRX_ACK)
             Serial.println("Received ACK");
@@ -59,7 +59,7 @@ void onEvent(ev_t ev) {
             Serial.println(LMIC.dataLen);
             Serial.println(F(" bytes of payload"));
         }
-        //нужно запланировать следующую отправку
+        //РЅСѓР¶РЅРѕ Р·Р°РїР»Р°РЅРёСЂРѕРІР°С‚СЊ СЃР»РµРґСѓСЋС‰СѓСЋ РѕС‚РїСЂР°РІРєСѓ
         os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL), do_send);
         break;
 
@@ -82,17 +82,17 @@ void onEvent(ev_t ev) {
     }
 }
 
-//отправляем сообщение 1
+//РѕС‚РїСЂР°РІР»СЏРµРј СЃРѕРѕР±С‰РµРЅРёРµ 1
 void do_send(osjob_t* j) {
-    if (LMIC.opmode & OP_TXRXPEND) {         //проверка, идет ли сейчас прием или передача данных
+    if (LMIC.opmode & OP_TXRXPEND) {         //РїСЂРѕРІРµСЂРєР°, РёРґРµС‚ Р»Рё СЃРµР№С‡Р°СЃ РїСЂРёРµРј РёР»Рё РїРµСЂРµРґР°С‡Р° РґР°РЅРЅС‹С…
         Serial.println(F("OP_TXRXPEND, not sending"));
     }
     else {
-        mydata[0] = 1;      //просто заполняю какими-то данными
+        mydata[0] = 1;      //РїСЂРѕСЃС‚Рѕ Р·Р°РїРѕР»РЅСЏСЋ РєР°РєРёРјРё-С‚Рѕ РґР°РЅРЅС‹РјРё
         mydata[1] = 2;
         mydata[2] = 3;
         mydata[3] = 4;
-        // mydata - массив данных, sizeof(mydata) - размер данных, 0 - опции, дополнительные настройки
+        // mydata - РјР°СЃСЃРёРІ РґР°РЅРЅС‹С…, sizeof(mydata) - СЂР°Р·РјРµСЂ РґР°РЅРЅС‹С…, 0 - РѕРїС†РёРё, РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё
         LMIC_setTxData2(port, mydata, sizeof(mydata), 0);      
         Serial.println(F("Packet queued"));
     }
@@ -111,9 +111,9 @@ void setup() {
     uint8_t nwkskey[sizeof(NWKSKEY)];
     memcpy_P(appskey, APPSKEY, sizeof(APPSKEY));
     memcpy_P(nwkskey, NWKSKEY, sizeof(NWKSKEY));
-    LMIC_setSession(0x1, DEVADDR, nwkskey, appskey);    //установили параметры для авторизации
+    LMIC_setSession(0x1, DEVADDR, nwkskey, appskey);    //СѓСЃС‚Р°РЅРѕРІРёР»Рё РїР°СЂР°РјРµС‚СЂС‹ РґР»СЏ Р°РІС‚РѕСЂРёР·Р°С†РёРё
 
-    // Настройка каналов
+    // РќР°СЃС‚СЂРѕР№РєР° РєР°РЅР°Р»РѕРІ
     LMIC_setupChannel(0, 864100000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
     LMIC_setupChannel(1, 864300000, DR_RANGE_MAP(DR_SF12, DR_SF7B), BAND_CENTI);
     LMIC_setupChannel(2, 864500000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
@@ -127,11 +127,11 @@ void setup() {
     LMIC_setLinkCheckMode(0);
     LMIC_setDrTxpow(DR_SF12, 14);
 
-    do_send(&sendjob);              //отправка пакета
+    do_send(&sendjob);              //РѕС‚РїСЂР°РІРєР° РїР°РєРµС‚Р°
 
 }
 void loop() {
     
-    os_runloop_once();     //обслуживание задач, поставленных в очередь
+    os_runloop_once();     //РѕР±СЃР»СѓР¶РёРІР°РЅРёРµ Р·Р°РґР°С‡, РїРѕСЃС‚Р°РІР»РµРЅРЅС‹С… РІ РѕС‡РµСЂРµРґСЊ
   
 }
