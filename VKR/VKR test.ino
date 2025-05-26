@@ -1,137 +1,304 @@
+#include "LoRaWan_APP.h"
+#include <ModbusMaster.h>
+#include <EEPROM.h>
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
 
+RadioEvents_t RadioEvents;
 
-// LoRaWAN NwkSKey, network session key - network session key, сетевой ключ доступа
-static const PROGMEM u1_t NWKSKEY[16] = { 0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x26 };
+// Структура для хранения конфигурации устройства Modbus
+struct DeviceConfig {
+    uint8_t deviceType;
+    uint8_t deviceID;
+    uint16_t startReg;
+    uint16_t numRegs;
+    uint16_t pollInterval;
+    unsigned long lastPollTime;
+};
 
-// LoRaWAN AppSKey, application session key - ключ доступа приложения
-static const u1_t PROGMEM APPSKEY[16] = { 0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x26 };
+// Константы и размеры
+#define MAX_DEVICES 10
+#define CONFIG_START_ADDR 0
 
-// LoRaWAN end-device address (DevAddr) - адрес устройства
-static const u4_t DEVADDR = 0x22222226; 
+// Предварительно установленные устройства
+const DeviceConfig predefinedDevices[] = {
+    {
+        .deviceType = 1,                  // Тип устройства (можете поменять по своему усмотрению)
+        .deviceID = 1,                    // Slave Address устройства
+        .startReg = 100,                  // Начало диапазона регистров
+        .numRegs = 1,                     // Сколько регистров читать
+        .pollInterval = 10000,            // Интервал опроса (10 секунд)
+        .lastPollTime = 0                 // Последний успешный опрос
+    },
+    {
+        .deviceType = 2,                  // Еще один тип устройства
+        .deviceID = 2,
+        .startReg = 200,
+        .numRegs = 1,
+        .pollInterval = 15000,
+        .lastPollTime = 0
+    }
+};
 
+// Размеры массива предопределённых устройств
+const size_t NUM_PREDEFINED_DEVICES = sizeof(predefinedDevices) / sizeof(DeviceConfig);
 
-static uint8_t mydata[4];           //массив данных, буду отправлять несколько чисел
+// Другие важные константы и переменные
+uint8_t devEui[] = { 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x26 };
+uint8_t appEui[] = { 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x26 };
+uint8_t appKey[] = {0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x26 };
+
+uint8_t nwkSKey[] = { 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x26 };
+uint8_t appSKey[] = { 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x26 };
+
+uint32_t devAddr =  ( uint32_t )0x22222226;
+
+uint16_t userChannelsMask[6] = { 0x0004, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000 };
+
+LoRaMacRegion_t loraWanRegion = LORAMAC_REGION_EU868;
+DeviceClass_t loraWanClass = CLASS_A;
+
+uint32_t appTxDutyCycle = 300000;
+
+bool overTheAirActivation = false;
+bool loraWanAdr = true;
+bool isTxConfirmed = true;
+uint8_t appPort = 2;
+uint8_t confirmedNbTrials = 4;
+
+// Глобальные переменные
+ModbusMaster node;
+DeviceConfig devices[MAX_DEVICES];
+uint8_t numDevices = 0;
+bool configChanged = false;
+bool configMode = false;
 static osjob_t sendjob;
 
-const unsigned TX_INTERVAL = 30;        //раз в 30 сек будет отправлять данные на БС
-const unsigned port = 1;                //порт для передачи
- 
+// Флаг для проверки успешного присоединения
+bool joinedSuccessfully = false;
 
-// Установка частоты RX2 (в Гц)  
-const uint32_t RX2_FREQ = 869100000; // 869.1 МГц  
-
-// Установка Data Rate RX2 (DR0 для RU868)  
-const uint8_t RX2_DR = DR_SF12;
-
-
-// Пин-маппинг RFM95
-// Не знаю, как нужно настроить пины
-const lmic_pinmap lmic_pins = {
-    .nss = 10,                      //пин микросхемы. Проверяет, готово ли к работе устройство
-    .rxtx = LMIC_UNUSED_PIN,        //пин прехода с TX на RX, переключение режима
-    .rst = 9,                       //пин reset
-    .dio = {2, 3, LMIC_UNUSED_PIN}, // DIO0, DIO1, DIO2
-};
-// ===== Прототипы функций =====
-void sendStatus(osjob_t* j);
-void checkAlarm();
-void sendAlarm();
+// Вспомогательные функции
+void onEvent();
+void OnTxDone();
+void prepareTxFrame(uint8_t port);
+void loadPredefinedDevices();
+void processDeviceData(uint8_t deviceType, uint16_t reg, uint16_t value);
+void printConfig();
+void handleNormalMode();
+void forcePoll(String cmd);
+void pollDevice(uint8_t devIndex);
 
 
-uint8_t dataLength = 0;
-bool newDataReceived = false;
+// Инициализация модуля
+void setup() {
+    Serial.begin(115200);
+    Serial1.begin(9600, SERIAL_8N1, 16, 17); // Hardware Serial для RS485 (GPIO16-RX, GPIO17-TX)
+    Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE); 
+    
+    // Инициализация Modbus
+    node.begin(1, Serial1);
 
-//Параметры:
-// ev_t ev - событие, произошедшее в системе
-void onEvent(ev_t ev) {
-    Serial.print(os_getTime());     //выводит текущее время
-    Serial.print(": ");
-    switch (ev) {
-    case EV_TXCOMPLETE:         //если отправка завершена успешно, то выведем сообщение
-        Serial.println("EV_TXCOMPLETE");
-        if (LMIC.txrxFlags & TXRX_ACK)
-            Serial.println("Received ACK");
-        if (LMIC.dataLen) {
-            Serial.println(F("Received "));
-            Serial.println(LMIC.dataLen);
-            Serial.println(F(" bytes of payload"));
+    RadioEvents.TxDone = OnTxDone; // Регистрация только доступного обработчика TxDone
+
+    Radio.Init(&RadioEvents);
+
+    LoRaWAN.init(loraWanClass, loraWanRegion);
+    LoRaWAN.setDefaultDR(8); // SF8 — среднее соотношение качества и скорости
+
+    // Загрузка предопределённых устройств
+    loadPredefinedDevices();
+
+    // Установка начальных состояний
+    deviceState = DEVICE_STATE_INIT;
+    joinedSuccessfully = false;
+}
+
+// Основной цикл программы
+void loop() {
+    //handleNormalMode(); // Всё управление осуществляется через метод handleNormalMode()
+    onEvent();
+}
+
+
+
+
+void OnTxDone() {
+  Serial.println("TX Done");
+  deviceState = DEVICE_STATE_CYCLE; // Переход к следующему состоянию после успешной передачи
+}
+
+void prepareTxFrame(uint8_t port) {
+  appDataSize = 4;
+  appData[0] = 0x01;
+  appData[1] = 0x02;
+  appData[2] = 0x03;
+  appData[3] = 0x04;
+}
+
+// Загрузка предопределённых устройств
+void loadPredefinedDevices() {
+    memcpy(devices, predefinedDevices, sizeof(predefinedDevices)); // Скопировать предопределённые устройства
+    numDevices = NUM_PREDEFINED_DEVICES;                          // Установить количество устройств
+}
+
+// Обработчик события основного цикла
+void onEvent() {
+    switch(deviceState) {
+        case DEVICE_STATE_INIT: {
+            if (!joinedSuccessfully) { // Проверяем флаг присоединения
+                Serial.println("LoRaWAN.join");
+                LoRaWAN.join();
+                Serial.println("LoRaWAN.joined");
+            } else {
+                deviceState = DEVICE_STATE_SEND; // Переходим к отправке
+            }
+            break;
         }
-        //нужно запланировать следующую отправку
-        os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL), do_send);
-        break;
+        
+        case DEVICE_STATE_SEND: {
+            Serial.println("LoRaWAN.send");
+            prepareTxFrame(appPort);
+            LoRaWAN.send();
+            Serial.println("LoRaWAN.sent");
+            deviceState = DEVICE_STATE_CYCLE; // Переходим к следующему состоянию
+            break;
+        }
+        
+        case DEVICE_STATE_CYCLE: {
+            Serial.println("Waiting for next transmission...");
+            delay(appTxDutyCycle); // Ждем перед следующей передачей
+            deviceState = DEVICE_STATE_SEND; // Повторяем цикл
+            break;
+        }
+        
+        default:
+        {
+            Serial.println(deviceState);
+        }
+    }
+    
+    Radio.IrqProcess(); // Обработка прерываний радио-модуля
+}
 
-    case EV_JOINED:
-        Serial.println("EV_JOINED");
-        break;
+// Процедура обработки данных устройства
+void processDeviceData(uint8_t deviceType, uint16_t reg, uint16_t value) {
+    // Реализуйте свою логику обработки данных здесь
+}
 
-    case EV_RXCOMPLETE:
-        Serial.println("EV_RXCOMPLETE");
-        break;
+// Печать конфигурации
+void printConfig() {
+    Serial.println(F("Current configuration:"));
+    Serial.print(F("Devices: "));
+    Serial.print(numDevices);
+    Serial.print(F("/"));
+    Serial.println(MAX_DEVICES);
+    Serial.println(F("Index | Type | ID | StartReg | NumRegs | Interval"));
+    Serial.println(F("---------------------------------------------"));
 
-    case EV_JOIN_FAILED:
-        Serial.println("EV_JOIN_FAILED");
-        break;
+    for (int i = 0; i < numDevices; i++) {
+        Serial.print(i);
+        Serial.print(F("     | "));
+        Serial.print(devices[i].deviceType);
+        Serial.print(F("    | "));
+        Serial.print(devices[i].deviceID);
+        Serial.print(F("  | "));
+        Serial.print(devices[i].startReg);
+        Serial.print(F("      | "));
+        Serial.print(devices[i].numRegs);
+        Serial.print(F("     | "));
+        Serial.print(devices[i].pollInterval);
+        Serial.println(F("ms"));
+    }
 
-    default:
-        Serial.print("Unknown event: ");
-        Serial.println(ev);
-        break;
+    if (configChanged) {
+        Serial.println(F("Warning: Config has changes not saved to EEPROM! Use 'save' command."));
     }
 }
 
-//отправляем сообщение 1
-void do_send(osjob_t* j) {
-    if (LMIC.opmode & OP_TXRXPEND) {         //проверка, идет ли сейчас прием или передача данных
-        Serial.println(F("OP_TXRXPEND, not sending"));
+// Основной режим работы приложения
+void handleNormalMode() {
+    // Автоматический опрос устройств
+    for (int i = 0; i < numDevices; i++) {
+        if (millis() - devices[i].lastPollTime >= devices[i].pollInterval) {
+            pollDevice(i);
+            devices[i].lastPollTime = millis();
+        }
+    }
+
+    // Обрабатываем возможные команды пользователя
+    if (Serial.available()) {
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+
+        if (cmd == "list") {
+            printConfig();
+        }
+        else if (cmd.startsWith("poll ")) {
+            forcePoll(cmd);
+        }
+        else {
+            Serial.println(F("Only 'list' and 'poll' commands available in normal mode"));
+            Serial.println(F("Enter config mode for full configuration"));
+        }
+    }
+}
+
+// Принудительный опрос устройства
+void forcePoll(String cmd) {
+    int index;
+    if (sscanf(cmd.c_str(), "poll %d", &index) == 1) {
+        if (index >= 0 && index < numDevices) {
+            pollDevice(index);
+        }
+        else {
+            Serial.println(F("Invalid device index"));
+        }
     }
     else {
-        mydata[0] = 1;      //просто заполняю какими-то данными
-        mydata[1] = 2;
-        mydata[2] = 3;
-        mydata[3] = 4;
-        // mydata - массив данных, sizeof(mydata) - размер данных, 0 - опции, дополнительные настройки
-        LMIC_setTxData2(port, mydata, sizeof(mydata), 0);      
-        Serial.println(F("Packet queued"));
+        Serial.println(F("Invalid format. Use: poll <index>"));
     }
 }
 
-void setup() {
-  
-    Serial.begin(9600);
-    while (!Serial);
-    Serial.println("Initializing...");
-    os_init();
-    LMIC_reset();
-  
+// Опрос устройства
+void pollDevice(uint8_t devIndex) {
+    DeviceConfig& cfg = devices[devIndex];
+    node.begin(cfg.deviceID, Serial1);
 
-    uint8_t appskey[sizeof(APPSKEY)];
-    uint8_t nwkskey[sizeof(NWKSKEY)];
-    memcpy_P(appskey, APPSKEY, sizeof(APPSKEY));
-    memcpy_P(nwkskey, NWKSKEY, sizeof(NWKSKEY));
-    LMIC_setSession(0x1, DEVADDR, nwkskey, appskey);    //установили параметры для авторизации
+    Serial.print(F("Polling device "));
+    Serial.print(cfg.deviceID);
+    Serial.print(F(" (Type: "));
+    Serial.print(cfg.deviceType);
+    Serial.print(F(") Regs "));
+    Serial.print(cfg.startReg);
+    Serial.print(F("-"));
+    Serial.print(cfg.startReg + cfg.numRegs - 1);
+    Serial.print(F("... "));
 
-    // Настройка каналов
-    LMIC_setupChannel(0, 864100000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
-    LMIC_setupChannel(1, 864300000, DR_RANGE_MAP(DR_SF12, DR_SF7B), BAND_CENTI);
-    LMIC_setupChannel(2, 864500000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
-    LMIC_setupChannel(3, 864700000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
-    LMIC_setupChannel(4, 864900000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
-    LMIC_setupChannel(5, 869100000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
-    LMIC_setupChannel(6, 868900000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
-    LMIC_setupChannel(7, 869000000, DR_RANGE_MAP(DR_SF12, DR_SF7), BAND_CENTI);
-    LMIC_setupChannel(8, 869300000, DR_RANGE_MAP(DR_FSK, DR_FSK), BAND_MILLI);
+    uint8_t retries = 3;
+    bool success = false;
 
-    LMIC_setLinkCheckMode(0);
-    LMIC_setDrTxpow(DR_SF12, 14);
+    while (retries-- > 0) {
+        uint8_t result = node.readHoldingRegisters(cfg.startReg, cfg.numRegs);
+        if (result == node.ku8MBSuccess) {
+            success = true;
+            break;
+        }
+        delay(500); // Задержка между попытками
+    }
 
-    do_send(&sendjob);              //отправка пакета
-
-}
-void loop() {
-    
-    os_runloop_once();     //обслуживание задач, поставленных в очередь
-  
+    if (success) {
+        Serial.println(F("Success"));
+        for (uint16_t i = 0; i < cfg.numRegs; i++) {
+            uint16_t value = node.getResponseBuffer(i);
+            Serial.print(F("Reg "));
+            Serial.print(cfg.startReg + i);
+            Serial.print(F(": "));
+            Serial.println(value, HEX);
+            processDeviceData(cfg.deviceType, cfg.startReg + i, value);
+        }
+    }
+    else {
+        Serial.println(F("Modbus error"));
+    }
 }
